@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkFlow Pro - Modern Workforce Management</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <nav class="nav container">
+            <div class="logo">WorkFlow Pro</div>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#demo">Demo</a></li>
+                <li><a href="#pricing">Pricing</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+            <div class="auth-buttons">
+                <a href="#login" class="btn btn-secondary">Login</a>
+                <a href="#signup" class="btn btn-primary">Sign Up</a>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <h1>Streamline Your Workforce<br>All in One Platform</h1>
+            <p>Smart scheduling, seamless task management, and real-time communication designed for modern teams</p>
+            <div class="cta-buttons">
+                <a href="#demo" class="btn btn-primary btn-hero">Try Live Demo</a>
+                <a href="#features" class="btn btn-secondary btn-hero" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);">Learn More</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <div class="container">
+            <h2>Everything Your Team Needs</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📅</div>
+                    <h3>Smart Scheduling</h3>
+                    <p>Interactive calendar with shift management, availability tracking, and seamless schedule publishing for your entire team.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">✅</div>
+                    <h3>Task Management</h3>
+                    <p>Kanban boards and list views with priority settings, deadlines, file attachments, and progress tracking.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💬</div>
+                    <h3>Real-Time Chat</h3>
+                    <p>Built-in messaging with team channels, direct messages, and instant notifications for seamless communication.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Analytics Dashboard</h3>
+                    <p>Visual reports on team productivity, attendance tracking, and task completion rates with actionable insights.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="demo-section" id="demo">
+        <div class="container">
+            <div class="demo-container">
+                <div class="demo-content">
+                    <h2>See It In Action</h2>
+                    <p>Experience how WorkFlow Pro transforms team management with our interactive demo. Switch between scheduling, tasks, and communication to see the full power of an integrated workforce platform.</p>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value">94%</div>
+                            <div class="stat-label">Team Satisfaction</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">3x</div>
+                            <div class="stat-label">Faster Task Completion</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-preview">
+                    <div class="app-header">
+                        <div class="logo" style="color: white; font-size: 1.2rem;">WorkFlow Pro</div>
+                        <div class="user-info">
+                            <div class="avatar">👤</div>
+                            <span>Sarah Manager</span>
+                        </div>
+                    </div>
+                    <div class="dashboard">
+                        <div class="dashboard-nav">
+                            <div class="nav-item active" onclick="showView('schedule')">📅 Schedule</div>
+                            <div class="nav-item" onclick="showView('tasks')">✅ Tasks</div>
+                            <div class="nav-item" onclick="showView('chat')">💬 Chat</div>
+                        </div>
+                        <div class="dashboard-content">
+                            <!-- Schedule View -->
+                            <div class="schedule-view active" id="schedule">
+                                <div class="calendar-header">
+                                    <h3>This Week's Schedule</h3>
+                                    <button class="btn btn-primary" style="font-size: 0.8rem;">+ Add Shift</button>
+                                </div>
+                                <div class="calendar-grid">
+                                    <div class="calendar-day">
+                                        <strong>Mon 1</strong>
+                                        <div class="shift">John 9-5</div>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <strong>Tue 2</strong>
+                                        <div class="shift">Sarah 8-4</div>
+                                    </div>
+                                    <div class="calendar-day today">
+                                        <strong>Wed 3</strong>
+                                        <div class="shift">Mike 10-6</div>
+                                        <div class="shift">Lisa 2-8</div>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <strong>Thu 4</strong>
+                                        <div class="shift">John 9-5</div>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <strong>Fri 5</strong>
+                                        <div class="shift">Team Meeting</div>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <strong>Sat 6</strong>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <strong>Sun 7</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Tasks View -->
+                            <div class="tasks-view" id="tasks">
+                                <div class="kanban-board">
+                                    <div class="kanban-column">
+                                        <div class="kanban-header">📋 To Do (3)</div>
+                                        <div class="task-card priority-high">
+                                            <div class="task-title">Update client presentation</div>
+                                            <div class="task-meta">
+                                                <span>Due: Today</span>
+                                                <span>👤 Sarah</span>
+                                            </div>
+                                        </div>
+                                        <div class="task-card priority-medium">
+                                            <div class="task-title">Review Q4 reports</div>
+                                            <div class="task-meta">
+                                                <span>Due: Tomorrow</span>
+                                                <span>👤 Mike</span>
+                                            </div>
+                                        </div>
+                                        <div class="task-card priority-low">
+                                            <div class="task-title">Schedule team training</div>
+                                            <div class="task-meta">
+                                                <span>Due: Next Week</span>
+                                                <span>👤 Lisa</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="kanban-column">
+                                        <div class="kanban-header">🔄 In Progress (2)</div>
+                                        <div class="task-card priority-high">
+                                            <div class="task-title">Website redesign</div>
+                                            <div class="task-meta">
+                                                <span>Due: Friday</span>
+                                                <span>👤 John</span>
+                                            </div>
+                                        </div>
+                                        <div class="task-card priority-medium">
+                                            <div class="task-title">Database optimization</div>
+                                            <div class="task-meta">
+                                                <span>Due: Monday</span>
+                                                <span>👤 Mike</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="kanban-column">
+                                        <div class="kanban-header">✅ Completed (4)</div>
+                                        <div class="task-card">
+                                            <div class="task-title">Monthly reports</div>
+                                            <div class="task-meta">
+                                                <span>Completed</span>
+                                                <span>👤 Sarah</span>
+                                            </div>
+                                        </div>
+                                        <div class="task-card">
+                                            <div class="task-title">Team onboarding</div>
+                                            <div class="task-meta">
+                                                <span>Completed</span>
+                                                <span>👤 Lisa</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Chat View -->
+                            <div class="chat-view" id="chat">
+                                <div class="chat-sidebar">
+                                    <div class="chat-channel active"># general</div>
+                                    <div class="chat-channel"># projects</div>
+                                    <div class="chat-channel"># random</div>
+                                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid #e2e8f0;">
+                                    <div class="chat-channel">👤 John</div>
+                                    <div class="chat-channel">👤 Mike</div>
+                                    <div class="chat-channel">👤 Lisa</div>
+                                </div>
+                                <div class="chat-main">
+                                    <div class="chat-messages">
+                                        <div class="message">
+                                            <strong>Mike:</strong> Hey team, how's the project going?
+                                        </div>
+                                        <div class="message own">
+                                            Making good progress! Should be done by Friday.
+                                        </div>
+                                        <div class="message">
+                                            <strong>Lisa:</strong> Great! Let me know if you need any help.
+                                        </div>
+                                    </div>
+                                    <div class="chat-input">
+                                        <input type="text" placeholder="Type a message...">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script src="js/script.js"></script>
+</body>
+</html>
