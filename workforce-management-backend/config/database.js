@@ -15,23 +15,29 @@ const dbConfig = {
  */
 async function initializeDatabase() {
   try {
-    // Create database client
     db = createClient(dbConfig);
-    
+
     console.log('🔌 Connecting to Turso database...');
-    
+    console.log(`📍 Database URL: ${dbConfig.url.replace(/\/\/.*@/, '//***@')}`);
+
     // Test connection
     const result = await db.execute('SELECT 1 as test');
     if (result.rows[0].test === 1) {
       console.log('✅ Database connection successful');
     }
-    
-    // Run migrations
+
     await runMigrations();
-    
     return db;
   } catch (error) {
-    console.error('❌ Database initialization failed:', error);
+    console.error('❌ Database initialization failed:', error.message);
+
+    if (error.message.includes('ENOTFOUND') || error.message.includes('network')) {
+      console.error('💡 Check your TURSO_DATABASE_URL and internet connection');
+    }
+    if (error.message.includes('UNAUTHORIZED') || error.message.includes('token')) {
+      console.error('💡 Check your TURSO_AUTH_TOKEN');
+    }
+
     throw error;
   }
 }
@@ -42,15 +48,14 @@ async function initializeDatabase() {
 async function runMigrations() {
   try {
     console.log('🔄 Running database migrations...');
-    
-    // Check if migrations table exists
+
     const migrationTableExists = await db.execute(`
       SELECT name FROM sqlite_master 
       WHERE type='table' AND name='migrations'
     `);
-    
-    // Create migrations table if it doesn't exist
+
     if (migrationTableExists.rows.length === 0) {
+      console.log('📋 Creating migrations table...');
       await db.execute(`
         CREATE TABLE migrations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,124 +64,218 @@ async function runMigrations() {
         )
       `);
     }
-    
-    // Get list of executed migrations
+
     const executedMigrations = await db.execute('SELECT filename FROM migrations');
     const executedFiles = executedMigrations.rows.map(row => row.filename);
-    
-    // Read migration files
+
     const migrationsDir = path.join(__dirname, '..', 'migrations');
     try {
       await fs.access(migrationsDir);
     } catch {
-      // Create migrations directory if it doesn't exist
       await fs.mkdir(migrationsDir, { recursive: true });
       console.log('📁 Created migrations directory');
+
+      await createBasicSchema();
+      return;
     }
-    
+
     const migrationFiles = await fs.readdir(migrationsDir);
-    const sqlFiles = migrationFiles
-      .filter(file => file.endsWith('.sql'))
-      .sort(); // Execute in alphabetical order
-    
-    // Execute pending migrations
+    const sqlFiles = migrationFiles.filter(f => f.endsWith('.sql')).sort();
+
+    if (sqlFiles.length === 0) {
+      console.log('📋 No migration files found, creating basic schema...');
+      await createBasicSchema();
+      return;
+    }
+
     for (const filename of sqlFiles) {
       if (!executedFiles.includes(filename)) {
         console.log(`⬆️  Executing migration: ${filename}`);
-        
-        const filePath = path.join(migrationsDir, filename);
-        const sql = await fs.readFile(filePath, 'utf8');
-        
-        // Split SQL into individual statements
-        const statements = sql
-          .split(';')
-          .map(stmt => stmt.trim())
-          .filter(stmt => stmt.length > 0);
-        
-        // Execute each statement
-        for (const statement of statements) {
-          if (statement.toLowerCase().includes('create') || 
-              statement.toLowerCase().includes('insert') ||
-              statement.toLowerCase().includes('alter') ||
-              statement.toLowerCase().includes('drop')) {
-            await db.execute(statement);
-          }
+
+        try {
+          await executeMigrationFile(filename, migrationsDir);
+          await db.execute({
+            sql: 'INSERT INTO migrations (filename) VALUES (?)',
+            args: [filename],
+          });
+          console.log(`✅ Migration completed: ${filename}`);
+        } catch (error) {
+          console.error(`❌ Migration failed: ${filename}`);
+          throw error;
         }
-        
-        // Record migration as executed
-        await db.execute({
-          sql: 'INSERT INTO migrations (filename) VALUES (?)',
-          args: [filename]
-        });
-        
-        console.log(`✅ Migration completed: ${filename}`);
       }
     }
-    
-    // If no migration files exist, create the initial schema
-    if (sqlFiles.length === 0) {
-      console.log('📋 No migration files found, creating initial schema...');
-      await createInitialSchema();
-    }
-    
+
     console.log('✅ All migrations completed successfully');
-    
   } catch (error) {
-    console.error('❌ Migration failed:', error);
+    console.error('❌ Migration process failed:', error.message);
     throw error;
   }
 }
 
 /**
- * Create initial database schema
+ * Trigger-aware SQL parser
  */
-async function createInitialSchema() {
-  const schemaPath = path.join(__dirname, '..', 'schema.sql');
-  
-  try {
-    const schema = await fs.readFile(schemaPath, 'utf8');
-    const statements = schema
-      .split(';')
-      .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0);
-    
-    for (const statement of statements) {
-      if (statement.toLowerCase().includes('create') || 
-          statement.toLowerCase().includes('insert')) {
-        await db.execute(statement);
+function parseSqlStatements(sql) {
+  const statements = [];
+  let current = '';
+  let inString = false;
+  let stringChar = '';
+  let inTriggerBlock = false;
+
+  for (const line of sql.split('\n')) {
+    const trimmed = line.trim();
+
+    if (/^CREATE\s+TRIGGER/i.test(trimmed)) {
+      inTriggerBlock = true;
+    }
+
+    current += line + '\n';
+
+    for (const char of line) {
+      if (!inString && (char === '"' || char === "'")) {
+        inString = true;
+        stringChar = char;
+      } else if (inString && char === stringChar) {
+        inString = false;
+        stringChar = '';
       }
     }
-    
-    console.log('✅ Initial schema created successfully');
-    
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.log('⚠️  No schema.sql file found, skipping initial schema creation');
-    } else {
+
+    if (!inString && !inTriggerBlock && trimmed.endsWith(';')) {
+      statements.push(current.trim());
+      current = '';
+    }
+
+    if (inTriggerBlock && /^END;$/i.test(trimmed)) {
+      statements.push(current.trim());
+      current = '';
+      inTriggerBlock = false;
+    }
+  }
+
+  if (current.trim()) {
+    statements.push(current.trim());
+  }
+
+  return statements;
+}
+
+/**
+ * Execute a single migration file
+ */
+async function executeMigrationFile(filename, migrationsDir) {
+  const filePath = path.join(migrationsDir, filename);
+  const sql = await fs.readFile(filePath, 'utf8');
+
+  const cleanSql = sql
+    .replace(/--.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+
+  if (!cleanSql) {
+    console.log(`⚠️  Empty migration file: ${filename}`);
+    return;
+  }
+
+  const statements = parseSqlStatements(cleanSql);
+  console.log(`📝 Found ${statements.length} SQL statements in ${filename}`);
+
+  for (let i = 0; i < statements.length; i++) {
+    const statement = statements[i].replace(/;+$/, '');
+    if (statement.trim().length < 5) continue;
+
+    try {
+      console.log(`🔄 Executing statement ${i + 1}/${statements.length}`);
+      await db.execute(statement);
+    } catch (error) {
+      console.error(`❌ Error in statement ${i + 1}:`);
+      console.error(`   SQL: ${statement}`);
+      console.error(`   Error: ${error.message}`);
       throw error;
     }
   }
 }
 
 /**
- * Get database connection
+ * Create basic schema if no migrations exist
  */
-function getDatabase() {
-  if (!db) {
-    throw new Error('Database not initialized. Call initializeDatabase() first.');
-  }
-  return db;
+async function createBasicSchema() {
+  console.log('🏗️  Creating basic WorkFlow Pro schema...');
+
+  const basicSchema = `
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      role TEXT DEFAULT 'employee' CHECK (role IN ('admin', 'manager', 'employee')),
+      status TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
+      priority TEXT DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
+      assigned_to INTEGER,
+      created_by INTEGER NOT NULL,
+      due_date DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (assigned_to) REFERENCES users (id),
+      FOREIGN KEY (created_by) REFERENCES users (id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks (assigned_to);
+  `;
+
+  await executeSQLStatements(basicSchema);
+
+  await db.execute({
+    sql: 'INSERT INTO migrations (filename) VALUES (?)',
+    args: ['000_basic_schema.sql'],
+  });
+
+  console.log('✅ Basic schema created successfully');
 }
 
 /**
- * Execute a prepared statement with parameters
+ * Execute multiple SQL statements (also trigger-safe)
  */
+async function executeSQLStatements(sql) {
+  const cleanSql = sql
+    .replace(/--.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+
+  if (!cleanSql) return;
+
+  const statements = parseSqlStatements(cleanSql);
+
+  for (const statement of statements) {
+    if (statement.trim().length > 0) {
+      await db.execute(statement);
+    }
+  }
+}
+
+function getDatabase() {
+  if (!db) throw new Error('Database not initialized. Call initializeDatabase() first.');
+  return db;
+}
+
 async function executeQuery(sql, params = []) {
   try {
-    const result = await db.execute({
-      sql: sql,
-      args: params
-    });
+    const result = await db.execute({ sql, args: params });
     return result;
   } catch (error) {
     console.error('Database query error:', error);
@@ -184,215 +283,6 @@ async function executeQuery(sql, params = []) {
   }
 }
 
-/**
- * Execute multiple queries in a transaction
- */
-async function executeTransaction(queries) {
-  try {
-    await db.execute('BEGIN TRANSACTION');
-    
-    for (const query of queries) {
-      if (typeof query === 'string') {
-        await db.execute(query);
-      } else {
-        await db.execute({
-          sql: query.sql,
-          args: query.args || []
-        });
-      }
-    }
-    
-    await db.execute('COMMIT');
-    console.log('✅ Transaction completed successfully');
-    
-  } catch (error) {
-    await db.execute('ROLLBACK');
-    console.error('❌ Transaction failed, rolled back:', error);
-    throw error;
-  }
-}
-
-/**
- * Get user by ID with team information
- */
-async function getUserWithTeams(userId) {
-  const query = `
-    SELECT 
-      u.*,
-      GROUP_CONCAT(t.name) as team_names,
-      GROUP_CONCAT(t.id) as team_ids
-    FROM users u
-    LEFT JOIN team_members tm ON u.id = tm.user_id
-    LEFT JOIN teams t ON tm.team_id = t.id
-    WHERE u.id = ?
-    GROUP BY u.id
-  `;
-  
-  const result = await executeQuery(query, [userId]);
-  return result.rows[0] || null;
-}
-
-/**
- * Get paginated results with counting
- */
-async function getPaginatedResults(baseQuery, countQuery, params = [], page = 1, limit = 20) {
-  const offset = (page - 1) * limit;
-  
-  // Get total count
-  const countResult = await executeQuery(countQuery, params);
-  const total = countResult.rows[0].count;
-  
-  // Get paginated data
-  const dataQuery = `${baseQuery} LIMIT ${limit} OFFSET ${offset}`;
-  const dataResult = await executeQuery(dataQuery, params);
-  
-  return {
-    data: dataResult.rows,
-    pagination: {
-      page: page,
-      limit: limit,
-      total: total,
-      totalPages: Math.ceil(total / limit),
-      hasNext: page * limit < total,
-      hasPrev: page > 1
-    }
-  };
-}
-
-/**
- * Search users with filters
- */
-async function searchUsers(filters = {}) {
-  let whereClause = '1=1';
-  const params = [];
-  
-  if (filters.search) {
-    whereClause += ' AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)';
-    const searchTerm = `%${filters.search}%`;
-    params.push(searchTerm, searchTerm, searchTerm);
-  }
-  
-  if (filters.role) {
-    whereClause += ' AND role = ?';
-    params.push(filters.role);
-  }
-  
-  if (filters.status) {
-    whereClause += ' AND status = ?';
-    params.push(filters.status);
-  }
-  
-  if (filters.teamId) {
-    whereClause += ' AND id IN (SELECT user_id FROM team_members WHERE team_id = ?)';
-    params.push(filters.teamId);
-  }
-  
-  const baseQuery = `
-    SELECT u.*, GROUP_CONCAT(t.name) as team_names
-    FROM users u
-    LEFT JOIN team_members tm ON u.id = tm.user_id
-    LEFT JOIN teams t ON tm.team_id = t.id
-    WHERE ${whereClause}
-    GROUP BY u.id
-    ORDER BY u.first_name, u.last_name
-  `;
-  
-  const countQuery = `
-    SELECT COUNT(DISTINCT u.id) as count
-    FROM users u
-    LEFT JOIN team_members tm ON u.id = tm.user_id
-    WHERE ${whereClause}
-  `;
-  
-  return getPaginatedResults(
-    baseQuery, 
-    countQuery, 
-    params, 
-    filters.page || 1, 
-    filters.limit || 20
-  );
-}
-
-/**
- * Get dashboard stats
- */
-async function getDashboardStats(userId, userRole) {
-  const stats = {};
-  
-  try {
-    // Get team IDs for the user (if not admin)
-    let teamFilter = '';
-    let teamParams = [];
-    
-    if (userRole !== 'admin') {
-      const userTeams = await executeQuery(`
-        SELECT team_id FROM team_members WHERE user_id = ?
-      `, [userId]);
-      
-      const teamIds = userTeams.rows.map(row => row.team_id);
-      if (teamIds.length > 0) {
-        teamFilter = `WHERE team_id IN (${teamIds.map(() => '?').join(',')})`;
-        teamParams = teamIds;
-      }
-    }
-    
-    // Total active users
-    const usersResult = await executeQuery(`
-      SELECT COUNT(*) as count FROM users WHERE status = 'active'
-    `);
-    stats.activeUsers = usersResult.rows[0].count;
-    
-    // Total tasks by status
-    const tasksResult = await executeQuery(`
-      SELECT status, COUNT(*) as count 
-      FROM tasks 
-      ${teamFilter ? `WHERE board_id IN (SELECT id FROM boards ${teamFilter})` : ''}
-      GROUP BY status
-    `, teamParams);
-    
-    stats.tasks = {
-      todo: 0,
-      in_progress: 0,
-      completed: 0,
-      total: 0
-    };
-    
-    tasksResult.rows.forEach(row => {
-      stats.tasks[row.status] = row.count;
-      stats.tasks.total += row.count;
-    });
-    
-    // Upcoming shifts (next 7 days)
-    const shiftsResult = await executeQuery(`
-      SELECT COUNT(*) as count 
-      FROM shifts 
-      WHERE shift_date BETWEEN date('now') AND date('now', '+7 days')
-      AND status = 'scheduled'
-      ${userRole !== 'admin' ? 'AND user_id = ?' : ''}
-    `, userRole !== 'admin' ? [userId] : []);
-    
-    stats.upcomingShifts = shiftsResult.rows[0].count;
-    
-    // Unread notifications
-    const notificationsResult = await executeQuery(`
-      SELECT COUNT(*) as count 
-      FROM notifications 
-      WHERE user_id = ? AND is_read = FALSE
-    `, [userId]);
-    
-    stats.unreadNotifications = notificationsResult.rows[0].count;
-    
-    return stats;
-    
-  } catch (error) {
-    console.error('Error getting dashboard stats:', error);
-    throw error;
-  }
-}
-
-/**
- * Close database connection
- */
 async function closeDatabase() {
   if (db) {
     await db.close();
@@ -404,11 +294,6 @@ module.exports = {
   initializeDatabase,
   getDatabase,
   executeQuery,
-  executeTransaction,
-  getUserWithTeams,
-  getPaginatedResults,
-  searchUsers,
-  getDashboardStats,
   closeDatabase,
-  db: () => db // Getter function for db
 };
+
