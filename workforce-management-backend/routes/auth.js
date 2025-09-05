@@ -51,14 +51,32 @@ router.post('/register', [
     const saltRounds = 12;
     const passwordHash = await bcrypt.hash(password, saltRounds);
     
-    // Insert user
+    // Insert user (FIXED - no RETURNING clause, handle undefined phone)
     const userResult = await executeQuery(`
-      INSERT INTO users (email, password_hash, first_name, last_name, role, phone) 
-      VALUES (?, ?, ?, ?, ?, ?) 
-      RETURNING id, email, first_name, last_name, role, status, created_at
-    `, [email, passwordHash, firstName, lastName, role, phone]);
+      INSERT INTO users (email, password_hash, first_name, last_name, role, phone, status, created_at, updated_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      email, 
+      passwordHash, 
+      firstName, 
+      lastName, 
+      role, 
+      phone || null,  // Handle undefined phone
+      'active',       // Explicit status
+      new Date().toISOString(),  // created_at
+      new Date().toISOString()   // updated_at
+    ]);
     
-    const newUser = userResult.rows[0];
+    // Get the inserted user ID (LibSQL format)
+    const userId = userResult.lastInsertRowid;
+    
+    // Fetch the created user
+    const newUserResult = await executeQuery(
+      'SELECT id, email, first_name, last_name, role, status, created_at FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    const newUser = newUserResult.rows[0];
     
     // Generate tokens
     const token = generateToken(newUser);

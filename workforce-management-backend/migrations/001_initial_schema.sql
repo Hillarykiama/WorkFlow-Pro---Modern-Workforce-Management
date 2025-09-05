@@ -1,11 +1,7 @@
--- WorkFlow Pro - Complete Database Schema for Turso
--- This schema supports all features: users, scheduling, tasks, communication, and analytics
-
 -- ================================
--- USER MANAGEMENT TABLES
+-- USERS & TEAMS
 -- ================================
 
--- Users table with role-based access
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
@@ -22,7 +18,6 @@ CREATE TABLE users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Teams/Departments
 CREATE TABLE teams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -32,7 +27,6 @@ CREATE TABLE teams (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Team memberships (many-to-many relationship)
 CREATE TABLE team_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
@@ -42,10 +36,9 @@ CREATE TABLE team_members (
 );
 
 -- ================================
--- SCHEDULING TABLES
+-- SCHEDULING
 -- ================================
 
--- Work schedules (weekly/monthly patterns)
 CREATE TABLE schedules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER REFERENCES teams(id),
@@ -59,7 +52,6 @@ CREATE TABLE schedules (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Individual shifts
 CREATE TABLE shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     schedule_id INTEGER REFERENCES schedules(id) ON DELETE CASCADE,
@@ -67,8 +59,8 @@ CREATE TABLE shifts (
     shift_date DATE NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
-    break_duration INTEGER DEFAULT 0, -- minutes
-    position TEXT, -- role during shift (cashier, manager, etc.)
+    break_duration INTEGER DEFAULT 0,
+    position TEXT,
     location TEXT,
     status TEXT CHECK(status IN ('scheduled', 'confirmed', 'completed', 'cancelled', 'no_show')) DEFAULT 'scheduled',
     notes TEXT,
@@ -77,13 +69,12 @@ CREATE TABLE shifts (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Shift swap requests
 CREATE TABLE shift_swaps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     original_shift_id INTEGER REFERENCES shifts(id),
     requesting_user_id INTEGER REFERENCES users(id),
     target_user_id INTEGER REFERENCES users(id),
-    target_shift_id INTEGER REFERENCES shifts(id), -- if swapping specific shift
+    target_shift_id INTEGER REFERENCES shifts(id),
     reason TEXT,
     status TEXT CHECK(status IN ('pending', 'approved', 'rejected', 'completed')) DEFAULT 'pending',
     approved_by INTEGER REFERENCES users(id),
@@ -91,7 +82,6 @@ CREATE TABLE shift_swaps (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Time off requests
 CREATE TABLE time_off_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),
@@ -106,10 +96,9 @@ CREATE TABLE time_off_requests (
 );
 
 -- ================================
--- TASK MANAGEMENT TABLES
+-- TASK MANAGEMENT
 -- ================================
 
--- Project boards (like Kanban boards)
 CREATE TABLE boards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER REFERENCES teams(id),
@@ -122,7 +111,6 @@ CREATE TABLE boards (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Task columns (To Do, In Progress, Completed, etc.)
 CREATE TABLE task_columns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     board_id INTEGER REFERENCES boards(id) ON DELETE CASCADE,
@@ -132,7 +120,6 @@ CREATE TABLE task_columns (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tasks
 CREATE TABLE tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     board_id INTEGER REFERENCES boards(id),
@@ -145,14 +132,13 @@ CREATE TABLE tasks (
     due_date DATETIME,
     estimated_hours DECIMAL(5,2),
     actual_hours DECIMAL(5,2) DEFAULT 0,
-    status TEXT CHECK(status IN ('todo', 'in_progress', 'review', 'completed', 'cancelled')) DEFAULT 'todo',
-    position INTEGER, -- for ordering within column
-    tags TEXT, -- JSON array of tags
+    status TEXT CHECK(status IN ('pending', 'in_progress', 'completed', 'cancelled')) DEFAULT 'pending',
+    position INTEGER,
+    tags TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Task comments/updates
 CREATE TABLE task_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
@@ -161,7 +147,6 @@ CREATE TABLE task_comments (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Task attachments
 CREATE TABLE task_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
@@ -174,10 +159,9 @@ CREATE TABLE task_attachments (
 );
 
 -- ================================
--- COMMUNICATION TABLES
+-- COMMUNICATION
 -- ================================
 
--- Chat channels
 CREATE TABLE channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER REFERENCES teams(id),
@@ -189,7 +173,6 @@ CREATE TABLE channels (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Channel memberships
 CREATE TABLE channel_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id INTEGER REFERENCES channels(id) ON DELETE CASCADE,
@@ -200,20 +183,18 @@ CREATE TABLE channel_members (
     UNIQUE(channel_id, user_id)
 );
 
--- Messages
 CREATE TABLE messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id INTEGER REFERENCES channels(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES users(id),
     content TEXT NOT NULL,
     message_type TEXT CHECK(message_type IN ('text', 'file', 'system')) DEFAULT 'text',
-    parent_id INTEGER REFERENCES messages(id), -- for threading
+    parent_id INTEGER REFERENCES messages(id),
     edited_at DATETIME,
     deleted_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Message attachments
 CREATE TABLE message_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
@@ -225,18 +206,17 @@ CREATE TABLE message_attachments (
 );
 
 -- ================================
--- NOTIFICATIONS TABLES
+-- NOTIFICATIONS
 -- ================================
 
--- Notifications
 CREATE TABLE notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     content TEXT,
     type TEXT CHECK(type IN ('schedule', 'task', 'message', 'system', 'reminder')) NOT NULL,
-    related_id INTEGER, -- ID of related entity (task, shift, etc.)
-    related_type TEXT, -- Type of related entity
+    related_id INTEGER,
+    related_type TEXT,
     is_read BOOLEAN DEFAULT FALSE,
     sent_via TEXT CHECK(sent_via IN ('in_app', 'email', 'sms')) DEFAULT 'in_app',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -244,10 +224,9 @@ CREATE TABLE notifications (
 );
 
 -- ================================
--- ANALYTICS & REPORTING TABLES
+-- ANALYTICS & REPORTING
 -- ================================
 
--- Time tracking (for productivity analytics)
 CREATE TABLE time_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),
@@ -255,13 +234,12 @@ CREATE TABLE time_entries (
     shift_id INTEGER REFERENCES shifts(id),
     start_time DATETIME NOT NULL,
     end_time DATETIME,
-    duration INTEGER, -- seconds
+    duration INTEGER,
     description TEXT,
     billable BOOLEAN DEFAULT FALSE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Attendance tracking
 CREATE TABLE attendance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),
@@ -277,10 +255,9 @@ CREATE TABLE attendance (
 );
 
 -- ================================
--- SYSTEM CONFIGURATION TABLES
+-- SYSTEM CONFIG
 -- ================================
 
--- Company/Organization settings
 CREATE TABLE organizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -288,12 +265,11 @@ CREATE TABLE organizations (
     timezone TEXT DEFAULT 'UTC',
     business_hours_start TIME DEFAULT '09:00',
     business_hours_end TIME DEFAULT '17:00',
-    working_days TEXT DEFAULT '1,2,3,4,5', -- JSON array of weekdays (1=Monday)
+    working_days TEXT DEFAULT '1,2,3,4,5',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- App settings and configurations
 CREATE TABLE settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT UNIQUE NOT NULL,
@@ -304,40 +280,34 @@ CREATE TABLE settings (
 );
 
 -- ================================
--- INDEXES for Performance
+-- INDEXES
 -- ================================
 
--- User indexes
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_status ON users(status);
 
--- Schedule/Shift indexes
 CREATE INDEX idx_shifts_date ON shifts(shift_date);
 CREATE INDEX idx_shifts_user ON shifts(user_id);
 CREATE INDEX idx_shifts_status ON shifts(status);
 
--- Task indexes
 CREATE INDEX idx_tasks_assigned ON tasks(assigned_to);
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_due_date ON tasks(due_date);
 CREATE INDEX idx_tasks_board ON tasks(board_id);
 
--- Message indexes
 CREATE INDEX idx_messages_channel ON messages(channel_id);
 CREATE INDEX idx_messages_user ON messages(user_id);
 CREATE INDEX idx_messages_created ON messages(created_at);
 
--- Notification indexes
 CREATE INDEX idx_notifications_user ON notifications(user_id);
 CREATE INDEX idx_notifications_read ON notifications(is_read);
 CREATE INDEX idx_notifications_type ON notifications(type);
 
 -- ================================
--- TRIGGERS for Auto-Updates
+-- TRIGGERS
 -- ================================
 
--- Update timestamps automatically
 CREATE TRIGGER update_users_timestamp 
     AFTER UPDATE ON users
     BEGIN
@@ -368,22 +338,21 @@ CREATE TRIGGER update_tasks_timestamp
         UPDATE tasks SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
     END;
 
--- ================================
--- DEFAULT DATA SETUP
--- ================================
-
--- Insert default task columns for new boards
+-- Updated default task columns
 CREATE TRIGGER create_default_columns
     AFTER INSERT ON boards
     BEGIN
         INSERT INTO task_columns (board_id, name, position, color) VALUES
-        (NEW.id, 'To Do', 1, '#f1f5f9'),
+        (NEW.id, 'Pending', 1, '#f1f5f9'),
         (NEW.id, 'In Progress', 2, '#fef3c7'),
-        (NEW.id, 'Review', 3, '#ddd6fe'),
-        (NEW.id, 'Completed', 4, '#d1fae5');
+        (NEW.id, 'Completed', 3, '#d1fae5'),
+        (NEW.id, 'Cancelled', 4, '#fecaca');
     END;
 
--- Insert default settings
+-- ================================
+-- DEFAULT DATA
+-- ================================
+
 INSERT OR IGNORE INTO settings (key, value, type, description) VALUES
 ('company_name', 'WorkFlow Pro', 'string', 'Company name'),
 ('max_shift_hours', '12', 'number', 'Maximum hours per shift'),
@@ -393,6 +362,5 @@ INSERT OR IGNORE INTO settings (key, value, type, description) VALUES
 ('enable_time_tracking', 'true', 'boolean', 'Enable time tracking features'),
 ('enable_shift_swaps', 'true', 'boolean', 'Allow employees to request shift swaps');
 
--- Insert a default organization
 INSERT OR IGNORE INTO organizations (name, timezone) VALUES 
 ('Default Organization', 'UTC');
