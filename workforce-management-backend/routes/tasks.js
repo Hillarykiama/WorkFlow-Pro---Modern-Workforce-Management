@@ -1,354 +1,367 @@
+// routes/tasks.js
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { executeQuery } = require('../config/database'); // FIXED: Use executeQuery instead of db
+const { executeQuery } = require('../config/database');
+const asyncHandler = require('../middleware/asyncHandler');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-/**
- * Validation middleware for task operations
- */
+// Protect all routes
+router.use(authenticateToken);
+
+/* ---------- Validation schemas ---------- */
 const validateTask = [
-  body('title').trim().isLength({ min: 1, max: 255 }).withMessage('Title is required and must be less than 255 characters'),
-  body('description').optional().isLength({ max: 1000 }).withMessage('Description must be less than 1000 characters'),
-  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be one of: low, medium, high'),
-  body('status').optional().isIn(['todo', 'in_progress', 'review', 'completed', 'cancelled'])
-    .withMessage('Status must be one of: todo, in_progress, review, completed, cancelled'),
-  body('assignedTo').optional().isInt().withMessage('Assigned user must be a valid user ID'),
-  body('dueDate').optional().isISO8601().toDate().withMessage('Due date must be a valid date'),
-  body('estimatedHours').optional().isFloat({ min: 0 }).withMessage('Estimated hours must be a positive number'),
-  body('tags').optional().isArray().withMessage('Tags must be an array'),
-  body('boardId').optional().isInt().withMessage('Board ID must be a valid integer')
+  body('title').trim().isLength({ min: 1, max: 255 }),
+  body('description').optional().isLength({ max: 1000 }),
+  body('priority').optional().isIn(['low', 'medium', 'high']),
+  body('status').optional().isIn(['todo', 'in_progress', 'review', 'completed', 'cancelled']),
+  body('assignedTo').optional().isInt(),
+  body('dueDate').optional().isISO8601().toDate(),
+  body('estimatedHours').optional().isFloat({ min: 0 }),
+  body('tags').optional().isArray(),
+  body('boardId').optional().isInt()
 ];
 
 const validateTaskUpdate = [
-  body('title').optional().trim().isLength({ min: 1, max: 255 }).withMessage('Title must be less than 255 characters'),
-  body('description').optional().isLength({ max: 1000 }).withMessage('Description must be less than 1000 characters'),
-  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be one of: low, medium, high'),
-  body('status').optional().isIn(['todo', 'in_progress', 'review', 'completed', 'cancelled'])
-    .withMessage('Status must be one of: todo, in_progress, review, completed, cancelled'),
-  body('assignedTo').optional().isInt().withMessage('Assigned user must be a valid user ID'),
-  body('dueDate').optional().isISO8601().toDate().withMessage('Due date must be a valid date'),
-  body('estimatedHours').optional().isFloat({ min: 0 }).withMessage('Estimated hours must be a positive number'),
-  body('actualHours').optional().isFloat({ min: 0 }).withMessage('Actual hours must be a positive number'),
-  body('tags').optional().isArray().withMessage('Tags must be an array'),
-  body('boardId').optional().isInt().withMessage('Board ID must be a valid integer')
+  body('title').optional().trim().isLength({ min: 1, max: 255 }),
+  body('description').optional().isLength({ max: 1000 }),
+  body('priority').optional().isIn(['low', 'medium', 'high']),
+  body('status').optional().isIn(['todo', 'in_progress', 'review', 'completed', 'cancelled']),
+  body('assignedTo').optional().custom(val => (val === null || Number.isInteger(val)) ? true : false),
+  body('dueDate').optional().isISO8601().toDate(),
+  body('estimatedHours').optional().isFloat({ min: 0 }),
+  body('actualHours').optional().isFloat({ min: 0 }),
+  body('tags').optional().isArray(),
+  body('boardId').optional().isInt()
 ];
 
-/**
- * Helper function to handle validation errors
- */
-const handleValidationErrors = (req, res, next) => {
+function handleValidationErrors(req, res, next) {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      message: 'Validation error',
-      errors: errors.array()
-    });
-  }
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, message: 'Validation error', errors: errors.array() });
   next();
-};
+}
 
-/**
- * Helper function to check if user can access task
- */
-const canAccessTask = async (userId, taskId, userRole) => {
+/* ---------- Helpers ---------- */
+
+async function canAccessTask(userId, taskId, userRole) {
   if (userRole === 'admin') return true;
+  const rr = await executeQuery('SELECT created_by, assigned_to FROM tasks WHERE id = ? AND deleted_at IS NULL', [taskId]);
+  if (rr.rows.length === 0) return false;
+  const t = rr.rows[0];
+  if (t.created_by === userId || t.assigned_to === userId) return true;
+  // TODO: extend for team/manager access
+  return false;
+}
 
-  const taskResult = await executeQuery(
-    'SELECT created_by, assigned_to FROM tasks WHERE id = ?',
-    [taskId]
-  );
+/* ---------- Routes ---------- */
 
-  if (taskResult.rows.length === 0) return false;
+// GET /api/tasks
+router.get('/', asyncHandler(async (req, res) => {
+  const {
+    page = 1, limit = 20, status, priority, assignedTo, createdBy, boardId, search,
+    sortBy = 'created_at', sortOrder = 'DESC'
+  } = req.query;
 
-  const task = taskResult.rows[0];
-  return task.created_by === userId || task.assigned_to === userId;
-};
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
 
-/**
- * @route GET /api/tasks
- * @desc Get all tasks with filtering and pagination
- * @access Private
- */
-router.get('/', async (req, res) => {
-  try {
-    const {
-      page = 1,
-      limit = 20,
-      status,
-      priority,
-      assignedTo,
-      createdBy,
-      boardId,
-      search,
-      sortBy = 'created_at',
-      sortOrder = 'DESC'
-    } = req.query;
+  const whereConditions = ['t.deleted_at IS NULL'];
+  const queryParams = [];
 
-    const userId = req.user.id;
-    const userRole = req.user.role;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    // Build WHERE clause
-    let whereConditions = [];
-    let queryParams = [];
-
-    if (userRole !== 'admin') {
-      whereConditions.push('(t.created_by = ? OR t.assigned_to = ?)');
-      queryParams.push(userId, userId);
-    }
-
-    if (status) {
-      whereConditions.push('t.status = ?');
-      queryParams.push(status);
-    }
-
-    if (priority) {
-      whereConditions.push('t.priority = ?');
-      queryParams.push(priority);
-    }
-
-    if (assignedTo) {
-      whereConditions.push('t.assigned_to = ?');
-      queryParams.push(parseInt(assignedTo));
-    }
-
-    if (createdBy) {
-      whereConditions.push('t.created_by = ?');
-      queryParams.push(parseInt(createdBy));
-    }
-
-    if (boardId) {
-      whereConditions.push('t.board_id = ?');
-      queryParams.push(parseInt(boardId));
-    }
-
-    if (search) {
-      whereConditions.push('(t.title LIKE ? OR t.description LIKE ?)');
-      const searchTerm = `%${search}%`;
-      queryParams.push(searchTerm, searchTerm);
-    }
-
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-
-    const validSortColumns = ['id', 'title', 'priority', 'status', 'created_at', 'updated_at', 'due_date'];
-    const validSortOrders = ['ASC', 'DESC'];
-    
-    const safeSortBy = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    const safeSortOrder = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
-
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM tasks t
-      ${whereClause}
-    `;
-    
-    const countResult = await executeQuery(countQuery, queryParams);
-    const total = countResult.rows[0].total;
-
-    const tasksQuery = `
-      SELECT 
-        t.*,
-        creator.first_name as creator_first_name,
-        creator.last_name as creator_last_name,
-        creator.email as creator_email,
-        assignee.first_name as assignee_first_name,
-        assignee.last_name as assignee_last_name,
-        assignee.email as assignee_email,
-        b.name as board_name
-      FROM tasks t
-      LEFT JOIN users creator ON t.created_by = creator.id
-      LEFT JOIN users assignee ON t.assigned_to = assignee.id
-      LEFT JOIN boards b ON t.board_id = b.id
-      ${whereClause}
-      ORDER BY t.${safeSortBy} ${safeSortOrder}
-      LIMIT ? OFFSET ?
-    `;
-
-    const tasksResult = await executeQuery(tasksQuery, [...queryParams, parseInt(limit), offset]);
-
-    const tasks = tasksResult.rows.map(task => ({
-      id: task.id,
-      title: task.title,
-      description: task.description,
-      status: task.status,
-      priority: task.priority,
-      estimatedHours: task.estimated_hours,
-      actualHours: task.actual_hours,
-      dueDate: task.due_date,
-      tags: task.tags ? JSON.parse(task.tags) : [],
-      boardId: task.board_id,
-      boardName: task.board_name,
-      createdBy: {
-        id: task.created_by,
-        firstName: task.creator_first_name,
-        lastName: task.creator_last_name,
-        email: task.creator_email
-      },
-      assignedTo: task.assigned_to ? {
-        id: task.assigned_to,
-        firstName: task.assignee_first_name,
-        lastName: task.assignee_last_name,
-        email: task.assignee_email
-      } : null,
-      createdAt: task.created_at,
-      updatedAt: task.updated_at
-    }));
-
-    const totalPages = Math.ceil(total / parseInt(limit));
-
-    res.json({
-      success: true,
-      tasks,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        totalPages,
-        hasNext: parseInt(page) < totalPages,
-        hasPrev: parseInt(page) > 1
-      }
-    });
-
-  } catch (error) {
-    console.error('Get tasks error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch tasks',
-      code: 'FETCH_TASKS_ERROR'
-    });
+  if (userRole !== 'admin') {
+    whereConditions.push('(t.created_by = ? OR t.assigned_to = ?)');
+    queryParams.push(userId, userId);
   }
-});
 
-/**
- * @route POST /api/tasks
- * @desc Create a new task
- * @access Private
- */
-router.post('/', validateTask, handleValidationErrors, async (req, res) => {
-  try {
-    const {
-      title,
-      description = '',
-      priority = 'medium',
-      status = 'todo',   // ✅ default is "todo"
-      assignedTo,
-      dueDate,
-      estimatedHours,
-      tags = [],
-      boardId
-    } = req.body;
+  if (status) { whereConditions.push('t.status = ?'); queryParams.push(status); }
+  if (priority) { whereConditions.push('t.priority = ?'); queryParams.push(priority); }
+  if (assignedTo) { whereConditions.push('t.assigned_to = ?'); queryParams.push(parseInt(assignedTo)); }
+  if (createdBy) { whereConditions.push('t.created_by = ?'); queryParams.push(parseInt(createdBy)); }
+  if (boardId) { whereConditions.push('t.board_id = ?'); queryParams.push(parseInt(boardId)); }
+  if (search) { whereConditions.push('(t.title LIKE ? OR t.description LIKE ?)'); const s = `%${search}%`; queryParams.push(s, s); }
 
-    const userId = req.user.id;
+  const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    if (assignedTo) {
-      const userResult = await executeQuery(
-        'SELECT id FROM users WHERE id = ? AND status = "active"',
-        [assignedTo]
-      );
-      if (userResult.rows.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Assigned user not found or inactive',
-          code: 'INVALID_ASSIGNEE'
-        });
-      }
+  const validSortColumns = ['id', 'title', 'priority', 'status', 'created_at', 'updated_at', 'due_date'];
+  const safeSortBy = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
+  const safeSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+
+  const countQ = `SELECT COUNT(*) as total FROM tasks t ${whereClause}`;
+  const countR = await executeQuery(countQ, queryParams);
+  const total = countR.rows[0] ? Number(countR.rows[0].total) : 0;
+
+  const tasksQ = `
+    SELECT t.*, creator.first_name AS creator_first_name, creator.last_name AS creator_last_name,
+           creator.email AS creator_email, assignee.first_name AS assignee_first_name,
+           assignee.last_name AS assignee_last_name, assignee.email AS assignee_email,
+           b.name AS board_name
+    FROM tasks t
+    LEFT JOIN users creator ON t.created_by = creator.id
+    LEFT JOIN users assignee ON t.assigned_to = assignee.id
+    LEFT JOIN boards b ON t.board_id = b.id
+    ${whereClause}
+    ORDER BY t.${safeSortBy} ${safeSortOrder}
+    LIMIT ? OFFSET ?
+  `;
+
+  const tasksR = await executeQuery(tasksQ, [...queryParams, parseInt(limit), offset]);
+
+  const tasks = tasksR.rows.map(task => ({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    estimatedHours: task.estimated_hours,
+    actualHours: task.actual_hours,
+    dueDate: task.due_date,
+    tags: task.tags ? JSON.parse(task.tags) : [],
+    boardId: task.board_id,
+    boardName: task.board_name,
+    createdBy: {
+      id: task.created_by,
+      firstName: task.creator_first_name,
+      lastName: task.creator_last_name,
+      email: task.creator_email
+    },
+    assignedTo: task.assigned_to ? {
+      id: task.assigned_to,
+      firstName: task.assignee_first_name,
+      lastName: task.assignee_last_name,
+      email: task.assignee_email
+    } : null,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at
+  }));
+
+  res.json({
+    success: true,
+    tasks,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      totalPages: Math.ceil(total / parseInt(limit)),
+      hasNext: parseInt(page) < Math.ceil(total / parseInt(limit)),
+      hasPrev: parseInt(page) > 1
     }
+  });
+}));
 
-    if (boardId) {
-      const boardResult = await executeQuery(
-        'SELECT id FROM boards WHERE id = ?',
-        [boardId]
-      );
-      if (boardResult.rows.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Board not found',
-          code: 'INVALID_BOARD'
-        });
-      }
-    }
+// GET /api/tasks/:id
+router.get('/:id', asyncHandler(async (req, res) => {
+  const taskId = parseInt(req.params.id);
+  const userId = req.user.id;
+  const userRole = req.user.role;
 
-    const taskResult = await executeQuery(`
-      INSERT INTO tasks (
-        title, description, priority, status, assigned_to, due_date,
-        estimated_hours, tags, board_id, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      title,
-      description,
-      priority,
-      status,
-      assignedTo || null,
-      dueDate || null,
-      estimatedHours || null,
-      JSON.stringify(tags),
-      boardId || null,
-      userId,
-      new Date().toISOString(),
-      new Date().toISOString()
-    ]);
+  const access = await canAccessTask(userId, taskId, userRole);
+  if (!access) return res.status(403).json({ success: false, error: 'Access denied', code: 'ACCESS_DENIED' });
 
-    const taskId = taskResult.lastInsertRowid;
+  const r = await executeQuery(`
+    SELECT t.*, creator.first_name AS creator_first_name, creator.last_name AS creator_last_name,
+           creator.email AS creator_email, assignee.first_name AS assignee_first_name,
+           assignee.last_name AS assignee_last_name, assignee.email AS assignee_email,
+           b.name AS board_name
+    FROM tasks t
+    LEFT JOIN users creator ON t.created_by = creator.id
+    LEFT JOIN users assignee ON t.assigned_to = assignee.id
+    LEFT JOIN boards b ON t.board_id = b.id
+    WHERE t.id = ? AND t.deleted_at IS NULL
+  `, [taskId]);
 
-    const newTaskResult = await executeQuery(`
-      SELECT 
-        t.*,
-        creator.first_name as creator_first_name,
-        creator.last_name as creator_last_name,
-        creator.email as creator_email,
-        assignee.first_name as assignee_first_name,
-        assignee.last_name as assignee_last_name,
-        assignee.email as assignee_email
-      FROM tasks t
-      LEFT JOIN users creator ON t.created_by = creator.id
-      LEFT JOIN users assignee ON t.assigned_to = assignee.id
-      WHERE t.id = ?
-    `, [taskId]);
+  if (r.rows.length === 0) return res.status(404).json({ success: false, error: 'Task not found', code: 'TASK_NOT_FOUND' });
 
-    const task = newTaskResult.rows[0];
+  const task = r.rows[0];
+  res.json({ success: true, task: {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    estimatedHours: task.estimated_hours,
+    actualHours: task.actual_hours,
+    dueDate: task.due_date,
+    tags: task.tags ? JSON.parse(task.tags) : [],
+    boardId: task.board_id,
+    boardName: task.board_name,
+    createdBy: {
+      id: task.created_by,
+      firstName: task.creator_first_name,
+      lastName: task.creator_last_name,
+      email: task.creator_email
+    },
+    assignedTo: task.assigned_to ? {
+      id: task.assigned_to,
+      firstName: task.assignee_first_name,
+      lastName: task.assignee_last_name,
+      email: task.assignee_email
+    } : null,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at
+  }});
+}));
 
-    res.status(201).json({
-      success: true,
-      message: 'Task created successfully',
-      task: {
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        status: task.status,
-        priority: task.priority,
-        estimatedHours: task.estimated_hours,
-        actualHours: task.actual_hours,
-        dueDate: task.due_date,
-        tags: task.tags ? JSON.parse(task.tags) : [],
-        boardId: task.board_id,
-        createdBy: {
-          id: task.created_by,
-          firstName: task.creator_first_name,
-          lastName: task.creator_last_name,
-          email: task.creator_email
-        },
-        assignedTo: task.assigned_to ? {
-          id: task.assigned_to,
-          firstName: task.assignee_first_name,
-          lastName: task.assignee_last_name,
-          email: task.assignee_email
-        } : null,
-        createdAt: task.created_at,
-        updatedAt: task.updated_at
-      }
-    });
+// POST /api/tasks
+router.post('/', validateTask, handleValidationErrors, asyncHandler(async (req, res) => {
+  const {
+    title, description = '', priority = 'medium', status = 'todo',
+    assignedTo, dueDate, estimatedHours, tags = [], boardId
+  } = req.body;
+  const userId = req.user.id;
 
-  } catch (error) {
-    console.error('Create task error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to create task',
-      code: 'CREATE_TASK_ERROR'
-    });
+  if (assignedTo) {
+    const u = await executeQuery('SELECT id FROM users WHERE id = ? AND status = "active"', [assignedTo]);
+    if (u.rows.length === 0) return res.status(400).json({ success: false, error: 'Assigned user not found or inactive', code: 'INVALID_ASSIGNEE' });
   }
-});
+
+  if (boardId) {
+    const b = await executeQuery('SELECT id FROM boards WHERE id = ?', [boardId]);
+    if (b.rows.length === 0) return res.status(400).json({ success: false, error: 'Board not found', code: 'INVALID_BOARD' });
+  }
+
+  const insert = await executeQuery(`
+    INSERT INTO tasks (
+      title, description, priority, status, assigned_to, due_date,
+      estimated_hours, tags, board_id, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [title, description, priority, status, assignedTo || null, dueDate || null,
+      estimatedHours || null, JSON.stringify(tags), boardId || null, userId, new Date().toISOString(), new Date().toISOString()
+  ]);
+
+  const id = insert.lastInsertRowid;
+  const newTaskR = await executeQuery(`
+    SELECT t.*, creator.first_name AS creator_first_name, creator.last_name AS creator_last_name,
+           creator.email AS creator_email, assignee.first_name AS assignee_first_name,
+           assignee.last_name AS assignee_last_name, assignee.email AS assignee_email,
+           b.name AS board_name
+    FROM tasks t
+    LEFT JOIN users creator ON t.created_by = creator.id
+    LEFT JOIN users assignee ON t.assigned_to = assignee.id
+    LEFT JOIN boards b ON t.board_id = b.id
+    WHERE t.id = ?
+  `, [id]);
+
+  const task = newTaskR.rows[0];
+  res.status(201).json({ success: true, message: 'Task created successfully', task: {
+    id: task.id, title: task.title, description: task.description, status: task.status,
+    priority: task.priority, estimatedHours: task.estimated_hours, actualHours: task.actual_hours,
+    dueDate: task.due_date, tags: task.tags ? JSON.parse(task.tags) : [], boardId: task.board_id,
+    boardName: task.board_name,
+    createdBy: { id: task.created_by, firstName: task.creator_first_name, lastName: task.creator_last_name, email: task.creator_email },
+    assignedTo: task.assigned_to ? { id: task.assigned_to, firstName: task.assignee_first_name, lastName: task.assignee_last_name, email: task.assignee_email } : null,
+    createdAt: task.created_at, updatedAt: task.updated_at
+  }});
+}));
+
+// PUT /api/tasks/:id
+router.put('/:id', validateTaskUpdate, handleValidationErrors, asyncHandler(async (req, res) => {
+  const taskId = parseInt(req.params.id);
+  const userId = req.user.id;
+  const userRole = req.user.role;
+
+  const access = await canAccessTask(userId, taskId, userRole);
+  if (!access) return res.status(403).json({ success: false, error: 'Access denied', code: 'ACCESS_DENIED' });
+
+  const { title, description, priority, status, assignedTo, dueDate, estimatedHours, actualHours, tags, boardId } = req.body;
+
+  const updates = [];
+  const values = [];
+
+  if (title !== undefined) { updates.push('title = ?'); values.push(title); }
+  if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+  if (priority !== undefined) { updates.push('priority = ?'); values.push(priority); }
+  if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+  if (assignedTo !== undefined) {
+    if (assignedTo !== null) {
+      const u = await executeQuery('SELECT id FROM users WHERE id = ? AND status = "active"', [assignedTo]);
+      if (u.rows.length === 0) return res.status(400).json({ success: false, error: 'Assigned user not found or inactive', code: 'INVALID_ASSIGNEE' });
+    }
+    updates.push('assigned_to = ?'); values.push(assignedTo);
+  }
+  if (dueDate !== undefined) { updates.push('due_date = ?'); values.push(dueDate); }
+  if (estimatedHours !== undefined) { updates.push('estimated_hours = ?'); values.push(estimatedHours); }
+  if (actualHours !== undefined) { updates.push('actual_hours = ?'); values.push(actualHours); }
+  if (tags !== undefined) { updates.push('tags = ?'); values.push(JSON.stringify(tags)); }
+  if (boardId !== undefined) { updates.push('board_id = ?'); values.push(boardId); }
+
+  if (updates.length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update', code: 'NO_UPDATES' });
+
+  updates.push('updated_at = ?'); values.push(new Date().toISOString());
+  values.push(taskId);
+
+  await executeQuery(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, values);
+
+  const updatedR = await executeQuery(`
+    SELECT t.*, creator.first_name AS creator_first_name, creator.last_name AS creator_last_name,
+           creator.email AS creator_email, assignee.first_name AS assignee_first_name,
+           assignee.last_name AS assignee_last_name, assignee.email AS assignee_email,
+           b.name AS board_name
+    FROM tasks t
+    LEFT JOIN users creator ON t.created_by = creator.id
+    LEFT JOIN users assignee ON t.assigned_to = assignee.id
+    LEFT JOIN boards b ON t.board_id = b.id
+    WHERE t.id = ?
+  `, [taskId]);
+
+  const task = updatedR.rows[0];
+  res.json({ success: true, message: 'Task updated successfully', task: {
+    id: task.id, title: task.title, description: task.description, status: task.status,
+    priority: task.priority, estimatedHours: task.estimated_hours, actualHours: task.actual_hours,
+    dueDate: task.due_date, tags: task.tags ? JSON.parse(task.tags) : [], boardId: task.board_id,
+    boardName: task.board_name,
+    createdBy: { id: task.created_by, firstName: task.creator_first_name, lastName: task.creator_last_name, email: task.creator_email },
+    assignedTo: task.assigned_to ? { id: task.assigned_to, firstName: task.assignee_first_name, lastName: task.assignee_last_name, email: task.assignee_email } : null,
+    createdAt: task.created_at, updatedAt: task.updated_at
+  }});
+}));
+
+// DELETE /api/tasks/:id (soft delete)
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const taskId = parseInt(req.params.id);
+  const userId = req.user.id;
+  const userRole = req.user.role;
+
+  const access = await canAccessTask(userId, taskId, userRole);
+  if (!access) return res.status(403).json({ success: false, error: 'Access denied', code: 'ACCESS_DENIED' });
+
+  await executeQuery('UPDATE tasks SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL', [new Date().toISOString(), taskId]);
+
+  const check = await executeQuery('SELECT id FROM tasks WHERE id = ? AND deleted_at IS NOT NULL', [taskId]);
+  if (check.rows.length === 0) return res.status(404).json({ success: false, error: 'Task not found', code: 'TASK_NOT_FOUND' });
+
+  res.json({ success: true, message: 'Task deleted (soft) successfully' });
+}));
+
+// GET /api/tasks/stats/overview
+router.get('/stats/overview', asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+
+  let baseWhere = 'WHERE t.deleted_at IS NULL';
+  const params = [];
+
+  if (userRole !== 'admin') {
+    baseWhere += ' AND (t.created_by = ? OR t.assigned_to = ?)';
+    params.push(userId, userId);
+  }
+
+  const statusResult = await executeQuery(`SELECT status, COUNT(*) as count FROM tasks t ${baseWhere} GROUP BY status`, params);
+  const priorityResult = await executeQuery(`SELECT priority, COUNT(*) as count FROM tasks t ${baseWhere} GROUP BY priority`, params);
+
+  const overdueQuery = `
+    SELECT COUNT(*) as count
+    FROM tasks t
+    ${baseWhere} AND t.due_date IS NOT NULL AND t.due_date < ? AND t.status NOT IN ('completed','cancelled')
+  `;
+  const overdueResult = await executeQuery(overdueQuery, [...params, new Date().toISOString()]);
+
+  const stats = { byStatus: {}, byPriority: {}, overdue: overdueResult.rows[0] ? overdueResult.rows[0].count : 0, total: 0 };
+  (statusResult.rows || []).forEach(r => { stats.byStatus[r.status] = r.count; stats.total += r.count; });
+  (priorityResult.rows || []).forEach(r => { stats.byPriority[r.priority] = r.count; });
+
+  res.json({ success: true, stats });
+}));
 
 module.exports = router;
