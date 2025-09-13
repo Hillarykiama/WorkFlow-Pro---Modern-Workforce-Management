@@ -20,24 +20,26 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Security middleware
-app.use(helmet({
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"]
-    }
-  }
-}));
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+      },
+    },
+  })
+);
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
   message: {
-    error: 'Too many requests from this IP, please try again later.'
+    error: 'Too many requests from this IP, please try again later.',
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -50,10 +52,14 @@ app.use(compression());
 // CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowedOrigins = process.env.ALLOWED_ORIGINS 
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(',')
-      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'];
-    
+      : [
+          'http://localhost:3000',
+          'http://localhost:3001',
+          'http://localhost:5173',
+        ];
+
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -62,22 +68,12 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 app.use(cors(corsOptions));
 
-// Body parsing middleware
-app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf, encoding) => {
-    try {
-      JSON.parse(buf);
-    } catch (e) {
-      res.status(400).json({ error: 'Invalid JSON' });
-      return;
-    }
-  }
-}));
+// Body parsing middleware (✅ fixed)
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging middleware
@@ -97,22 +93,24 @@ app.get('/', (req, res) => {
     message: 'WorkFlow Pro API is running!',
     version: '1.0.0',
     docs: '/api',
-    health: '/health'
+    health: '/health',
   });
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     database: 'connected',
     uptime: Math.floor(process.uptime()),
     memory: {
-      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024 * 100) / 100,
-      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024 * 100) / 100
-    }
+      used:
+        Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100,
+      total:
+        Math.round((process.memoryUsage().heapTotal / 1024 / 1024) * 100) / 100,
+    },
   });
 });
 
@@ -127,25 +125,25 @@ app.get('/api', (req, res) => {
         register: 'POST /api/auth/register',
         login: 'POST /api/auth/login',
         profile: 'GET /api/auth/profile (requires auth)',
-        logout: 'POST /api/auth/logout (requires auth)'
+        logout: 'POST /api/auth/logout (requires auth)',
       },
       tasks: {
         list: 'GET /api/tasks (requires auth)',
         create: 'POST /api/tasks (requires auth)',
         update: 'PUT /api/tasks/:id (requires auth)',
         delete: 'DELETE /api/tasks/:id (requires auth)',
-        get: 'GET /api/tasks/:id (requires auth)'
+        get: 'GET /api/tasks/:id (requires auth)',
       },
       system: {
         health: 'GET /health',
-        docs: 'GET /api'
-      }
+        docs: 'GET /api',
+      },
     },
     database: {
       status: 'connected',
-      type: 'Turso (LibSQL)'
+      type: 'Turso (LibSQL)',
     },
-    authentication: 'JWT Bearer Token required for protected routes'
+    authentication: 'JWT Bearer Token required for protected routes',
   });
 });
 
@@ -173,10 +171,10 @@ process.on('SIGINT', () => {
 async function startServer() {
   try {
     console.log('🚀 WorkFlow Pro Server Starting...');
-    
+
     // Initialize database first
     await initializeDatabase();
-    
+
     // Start server
     const server = app.listen(PORT, () => {
       console.log(`📡 Server running on port ${PORT}`);
@@ -195,7 +193,6 @@ async function startServer() {
       }
       process.exit(1);
     });
-    
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
